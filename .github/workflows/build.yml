@@ -35,13 +35,15 @@ jobs:
           cd kernel
           # 1. 手动 hook 补丁（exec/open/stat/reboot）
           git apply -v ../patches/resukisu-hooks.patch
-          # 2. ReSukiSU 仓库重构为 BakaSU 后 setup.sh 已删除，
-          #    改用 2026-04-30 历史 commit 中保留的脚本，并 checkout 同一 commit
-          curl -LSs --retry 5 --retry-all-errors \
-            "https://raw.githubusercontent.com/Baka-SU/BakaSU/d857f65728fc07f7a970e1239215d8eb7a17a4e4/kernel/setup.sh" \
-            -o setup-old.sh
-          bash setup-old.sh d857f65728fc07f7a970e1239215d8eb7a17a4e4
+          # 2. ReSukiSU 已重构为 BakaSU，直接固定 2026-04-30 历史 commit，
+          #    手动复刻旧 setup.sh 的全部动作（避开其已失效的旧 clone 地址）
+          git clone https://github.com/Baka-SU/BakaSU.git KernelSU
+          ( cd KernelSU && git checkout d857f65728fc07f7a970e1239215d8eb7a17a4e4 )
           test -d KernelSU/kernel && echo "[+] KernelSU kernel tree present"
+          ( cd drivers && ln -sf ../KernelSU/kernel kernelsu )
+          printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          echo "--- drivers/Makefile tail ---"; tail -3 drivers/Makefile
           # 3. 用真实 defconfig 覆盖 wrapper 文件（wrapper 内容仅为路径引用），
           #    避免依赖厂商对 conf 的 wrapper 展开修改
           cp arch/arm64/configs/vendor/picasso_user_defconfig arch/arm64/configs/picasso_user_defconfig
