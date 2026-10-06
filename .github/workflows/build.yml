@@ -2,10 +2,17 @@ name: Build ReSukiSU boot.img for Redmi K30 5G (picasso)
 
 on:
   workflow_dispatch:
+    inputs:
+      ksu:
+        description: "集成 ReSukiSU；取消勾选=纯净 MiCode 对照内核（用于二分定位）"
+        type: boolean
+        default: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      KSU: ${{ github.event.inputs.ksu }}
     steps:
       - name: Checkout this repo
         uses: actions/checkout@v4
@@ -33,42 +40,47 @@ jobs:
         run: |
           set -uxo pipefail
           cd kernel
-          # 1. 手动 hook 补丁（exec/open/stat/reboot）
-          git apply -v ../patches/resukisu-hooks.patch
-          # 1b. 修复新版 GCC 对 ipa_hw_stats.c 边界检查 "sizeof < count + 1" 的
+          # 0a. 修复新版 GCC 对 ipa_hw_stats.c 边界检查 "sizeof < count + 1" 的
           #     copy_to_user 静态尺寸误报（同时消除 count+1 溢出隐患）
           sed -i 's/if (sizeof(dbg_buff) < count + 1) {/if (count >= sizeof(dbg_buff)) {/' \
             drivers/platform/msm/ipa/ipa_v3/ipa_hw_stats.c
-          # 1c. genksyms 无法理解函数返回类型上的 __packed，导致 gsi 的 __crc
+          # 0b. genksyms 无法理解函数返回类型上的 __packed，导致 gsi 的 __crc
           #     重定位在 -shared 链接下被新版 ld 拒绝（postmarketOS 同款修复）
           sed -i 's/static union __packed gsi_channel_scratch __gsi_update_mhi_channel_scratch(/static union gsi_channel_scratch __gsi_update_mhi_channel_scratch(/' \
             drivers/platform/msm/gsi/gsi.c
-          # 1d. 关闭高通 RTIC 防篡改：__rticdata 无 Kconfig 守卫、无条件把
+          # 0c. 关闭高通 RTIC 防篡改：__rticdata 无 Kconfig 守卫、无条件把
           #     selinux_state 等放入末尾独立 .bss.rtic 段，新版 ld 链接时该段
           #     地址超出 ADRP ±4GB 范围而截断。将宏置空，数据回到普通 BSS。
           sed -i -E 's/^#define __rticdata .*/#define __rticdata/' include/linux/init.h
-          # 2. ReSukiSU 已重构为 BakaSU，直接固定 2026-04-30 历史 commit，
-          #    手动复刻旧 setup.sh 的全部动作（避开其已失效的旧 clone 地址）
-          git clone https://github.com/Baka-SU/BakaSU.git KernelSU
-          ( cd KernelSU && git checkout d857f65728fc07f7a970e1239215d8eb7a17a4e4 )
-          test -d KernelSU/kernel && echo "[+] KernelSU kernel tree present"
-          ( cd drivers && ln -sf ../KernelSU/kernel kernelsu )
-          printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
-          sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          echo "--- drivers/Makefile tail ---"; tail -3 drivers/Makefile
-          # 3. picasso_user_defconfig 是指向 vendor/picasso_user_defconfig 的符号链接，
-          #    直接往真实文件追加 KSU 配置
-          cat >> arch/arm64/configs/vendor/picasso_user_defconfig <<'EOF'
-          CONFIG_KSU=y
-          CONFIG_KSU_MANUAL_HOOK=y
-          CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y
-          CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y
-          CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y
-          CONFIG_KALLSYMS=y
-          CONFIG_KALLSYMS_ALL=y
-          EOF
-          echo "=== tail of defconfig ==="
-          tail -10 arch/arm64/configs/picasso_user_defconfig
+
+          if [ "$KSU" = "true" ]; then
+            # 1. 手动 hook 补丁（exec/open/stat/reboot）
+            git apply -v ../patches/resukisu-hooks.patch
+            # 2. ReSukiSU 已重构为 BakaSU，直接固定 2026-04-30 历史 commit，
+            #    手动复刻旧 setup.sh 的全部动作（避开其已失效的旧 clone 地址）
+            git clone https://github.com/Baka-SU/BakaSU.git KernelSU
+            ( cd KernelSU && git checkout d857f65728fc07f7a970e1239215d8eb7a17a4e4 )
+            test -d KernelSU/kernel && echo "[+] KernelSU kernel tree present"
+            ( cd drivers && ln -sf ../KernelSU/kernel kernelsu )
+            printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+            echo "--- drivers/Makefile tail ---"; tail -3 drivers/Makefile
+            # 3. picasso_user_defconfig 是指向 vendor/picasso_user_defconfig 的符号链接，
+            #    直接往真实文件追加 KSU 配置
+            cat >> arch/arm64/configs/vendor/picasso_user_defconfig <<'EOF'
+            CONFIG_KSU=y
+            CONFIG_KSU_MANUAL_HOOK=y
+            CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y
+            CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y
+            CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y
+            CONFIG_KALLSYMS=y
+            CONFIG_KALLSYMS_ALL=y
+EOF
+            echo "=== tail of defconfig ==="
+            tail -10 arch/arm64/configs/picasso_user_defconfig
+          else
+            echo "[*] Baseline build: skipping hooks patch and all KSU integration"
+          fi
 
       - name: Build kernel
         run: |
@@ -127,5 +139,5 @@ jobs:
       - name: Upload boot-resukisu.img
         uses: actions/upload-artifact@v4
         with:
-          name: boot-resukisu-picasso
+          name: ${{ env.KSU == 'true' && 'boot-resukisu-picasso' || 'boot-baseline-picasso' }}
           path: boot-resukisu.img
