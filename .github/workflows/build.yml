@@ -39,6 +39,10 @@ jobs:
           #     copy_to_user 静态尺寸误报（同时消除 count+1 溢出隐患）
           sed -i 's/if (sizeof(dbg_buff) < count + 1) {/if (count >= sizeof(dbg_buff)) {/' \
             drivers/platform/msm/ipa/ipa_v3/ipa_hw_stats.c
+          # 1c. genksyms 无法理解函数返回类型上的 __packed，导致 gsi 的 __crc
+          #     重定位在 -shared 链接下被新版 ld 拒绝（postmarketOS 同款修复）
+          sed -i 's/static union __packed gsi_channel_scratch __gsi_update_mhi_channel_scratch(/static union gsi_channel_scratch __gsi_update_mhi_channel_scratch(/' \
+            drivers/platform/msm/gsi/gsi.c
           # 2. ReSukiSU 已重构为 BakaSU，直接固定 2026-04-30 历史 commit，
           #    手动复刻旧 setup.sh 的全部动作（避开其已失效的旧 clone 地址）
           git clone https://github.com/Baka-SU/BakaSU.git KernelSU
