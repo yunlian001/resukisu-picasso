@@ -67,25 +67,24 @@ jobs:
           # HOSTCFLAGS -fcommon 修复老 dtc 的 yylloc 多重定义（GCC10+ 默认 -fno-common）；
           # 小米 Makefile 强制 -Werror=<具体警告>，必须逐个 Wno-error 才能覆盖
           WNOERR="-Wno-error -Wno-error=strict-prototypes -Wno-error=implicit-int -Wno-error=incompatible-pointer-types -Wno-error=date-time -Wno-error=designated-init"
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-            CC=aarch64-linux-gnu-gcc \
-            HOSTCFLAGS="-fcommon -Wno-deprecated-declarations" \
-            KCFLAGS="$WNOERR" picasso_user_defconfig
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-            CC=aarch64-linux-gnu-gcc \
-            HOSTCFLAGS="-fcommon -Wno-deprecated-declarations" \
-            KCFLAGS="$WNOERR" -j$(nproc) 2>&1 | tee build.log
+          MKARGS=(O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CC=aarch64-linux-gnu-gcc "KCFLAGS=$WNOERR" HOSTCFLAGS=-fcommon)
+          make "${MKARGS[@]}" picasso_user_defconfig
+          set -o pipefail
+          make "${MKARGS[@]}" -j$(nproc) 2>&1 | tee build.log
+          # 显式确保镜像目标生成：若默认构建漏建或链接被掩盖，此处会暴露真实错误
+          make "${MKARGS[@]}" Image
+          echo "=== vmlinux ==="; ls -la out/vmlinux*
           echo "=== boot artifacts ==="
-          ls -la out/arch/arm64/boot/
+          ls -la out/arm64/boot/
+          test -f out/arch/arm64/boot/Image && echo "[+] Image present"
 
-      - name: Upload build log on failure
-        if: failure()
+      - name: Upload build log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-log
           path: kernel/build.log
+          if-no-files-found: ignore
 
       - name: Prepare stock boot.img
         run: |
@@ -102,11 +101,14 @@ jobs:
           ./magiskboot | head -2 || true
           mkdir -p boot_work && cd boot_work
           ../magiskboot unpack ../stock-boot.img
-          KERNEL=$(ls ../kernel/out/arch/arm64/boot/Image.gz-dtb 2>/dev/null \
-                || ls ../kernel/out/arch/arm64/boot/Image.gz 2>/dev/null \
-                || echo ../kernel/out/arch/arm64/boot/Image)
+          BOOTDIR=../kernel/out/arch/arm64/boot
+          KERNEL=""
+          for cand in Image Image.gz Image.gz-dtb Image-dtb; do
+            if [ -f "$BOOTDIR/$cand" ]; then KERNEL="$BOOTDIR/$cand"; break; fi
+          done
+          test -n "$KERNEL" || { echo "No kernel image found in $BOOTDIR"; ls -la "$BOOTDIR"; exit 1; }
           echo "Using kernel: $KERNEL"
-          cp $KERNEL kernel
+          cp "$KERNEL" kernel
           ../magiskboot repack ../stock-boot.img ../boot-resukisu.img
           cd .. && ls -la boot-resukisu.img
 
