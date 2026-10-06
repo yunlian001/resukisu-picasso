@@ -33,7 +33,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git ccache bc bison flex libssl-dev libncurses-dev \
             device-tree-compiler u-boot-tools lz4 zstd python3 curl wget unzip zip cpio kmod \
-            libelf-dev dwarves pahole rsync
+            libelf-dev dwarves pahole rsync clang lld llvm libstdc++-12-dev
 
       - name: Clone kernel source
         run: |
@@ -53,19 +53,15 @@ jobs:
           echo "CONFIG_KALLSYMS=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
           echo "CONFIG_KALLSYMS_ALL=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
 
-      - name: Setup clang toolchain
-        run: |
-          mkdir -p toolchain && cd toolchain
-          git clone --depth 1 -b master https://github.com/kdrag0n/proton-clang.git .
-
       - name: Build kernel
         run: |
           cd kernel
-          export PATH="$GITHUB_WORKSPACE/toolchain/bin:$PATH"
+          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
+          ccache -M 5G
           make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu- \
             LLVM=1 LLVM_IAS=1 vendor/picasso_user_defconfig
-          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
+          make O=out ARCH=arm64 CC="ccache clang" CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu- \
             LLVM=1 LLVM_IAS=1 -j$(nproc) 2>&1 | tee build.log
           ls -la out/arch/arm64/boot/
