@@ -35,10 +35,6 @@ jobs:
           cd kernel
           # 1. 手动 hook 补丁（exec/open/stat/reboot）
           git apply -v ../patches/resukisu-hooks.patch
-          # 1b. 小米 gcc-wrapper.py 仅兼容 Python 2，CI 默认 python3 会导致
-          #     CC 检测与全部编译失败，用仓库内 Python 3 移植版覆盖
-          cp ../patches/gcc-wrapper.py scripts/gcc-wrapper.py
-          chmod +x scripts/gcc-wrapper.py
           # 2. ReSukiSU 已重构为 BakaSU，直接固定 2026-04-30 历史 commit，
           #    手动复刻旧 setup.sh 的全部动作（避开其已失效的旧 clone 地址）
           git clone https://github.com/Baka-SU/BakaSU.git KernelSU
@@ -67,11 +63,17 @@ jobs:
           cd kernel
           export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
           ccache -M 5G || true
+          # 直接用 gcc 绕过小米的 gcc-wrapper.py（它会把任何警告判为致命错误）；
+          # HOSTCFLAGS -fcommon 修复老 dtc 的 yylloc 多重定义（GCC10+ 默认 -fno-common）
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            CC=aarch64-linux-gnu-gcc \
+            HOSTCFLAGS="-fcommon -Wno-deprecated-declarations" \
             KCFLAGS="-Wno-error" picasso_user_defconfig
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            CC=aarch64-linux-gnu-gcc \
+            HOSTCFLAGS="-fcommon -Wno-deprecated-declarations" \
             KCFLAGS="-Wno-error" -j$(nproc) 2>&1 | tee build.log
           echo "=== boot artifacts ==="
           ls -la out/arch/arm64/boot/
