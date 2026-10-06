@@ -35,6 +35,10 @@ jobs:
           cd kernel
           # 1. 手动 hook 补丁（exec/open/stat/reboot）
           git apply -v ../patches/resukisu-hooks.patch
+          # 1b. 修复新版 GCC 对 ipa_hw_stats.c 边界检查 "sizeof < count + 1" 的
+          #     copy_to_user 静态尺寸误报（同时消除 count+1 溢出隐患）
+          sed -i 's/if (sizeof(dbg_buff) < count + 1) {/if (count >= sizeof(dbg_buff)) {/' \
+            drivers/platform/msm/ipa/ipa_v3/ipa_hw_stats.c
           # 2. ReSukiSU 已重构为 BakaSU，直接固定 2026-04-30 历史 commit，
           #    手动复刻旧 setup.sh 的全部动作（避开其已失效的旧 clone 地址）
           git clone https://github.com/Baka-SU/BakaSU.git KernelSU
