@@ -1,0 +1,108 @@
+name: Build ReSukiSU boot.img for Redmi K30 5G (picasso)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rom_url:
+        description: 'MIUI 13 fastboot ROM tgz URL (for stock boot.img)'
+        required: true
+        default: 'https://bigota.d.miui.com/V13.0.3.0.SGICNXM/picasso_images_V13.0.3.0.SGICNXM_20220929.0000.00_12.0_cn_c25673d76a.tgz'
+      kernel_src:
+        description: 'Kernel source repo'
+        required: true
+        default: 'https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git'
+      kernel_branch:
+        description: 'Kernel source branch'
+        required: true
+        default: 'picasso-r-oss'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git ccache bc bison flex libssl-dev libncurses-dev \
+            device-tree-compiler u-boot-tools lz4 zstd python3 curl wget unzip zip cpio kmod \
+            libelf-dev dwarves pahole rsync
+
+      - name: Clone kernel source
+        run: |
+          git clone --depth 1 -b ${{ inputs.kernel_branch }} ${{ inputs.kernel_src }} kernel
+
+      - name: Integrate ReSukiSU
+        run: |
+          cd kernel
+          git config user.email "ci@local" && git config user.name "ci"
+          git apply --whitespace=fix ../patches/resukisu-hooks.patch
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+          echo "CONFIG_KSU=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KALLSYMS=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KALLSYMS_ALL=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+
+      - name: Setup clang toolchain
+        run: |
+          mkdir -p toolchain && cd toolchain
+          git clone --depth 1 -b master https://github.com/kdrag0n/proton-clang.git .
+
+      - name: Build kernel
+        run: |
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/toolchain/bin:$PATH"
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 LLVM_IAS=1 vendor/picasso_user_defconfig
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM=1 LLVM_IAS=1 -j$(nproc) 2>&1 | tee build.log
+          ls -la out/arch/arm64/boot/
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: kernel/build.log
+
+      - name: Get stock boot.img from ROM
+        run: |
+          mkdir -p rom && cd rom
+          echo "Downloading ROM (this takes a while)..."
+          curl -L -o rom.tgz "${{ inputs.rom_url }}"
+          tar -tzf rom.tgz | grep -E 'boot\.img$' | head -5
+          tar -xzf rom.tgz --wildcards '*/boot.img' || tar -xzf rom.tgz 'images/boot.img'
+          find . -name 'boot.img' -exec cp {} ../stock-boot.img \;
+          cd .. && rm -rf rom
+          ls -la stock-boot.img
+
+      - name: Repack boot.img with new kernel
+        run: |
+          curl -L -o magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v28.1/app-release.apk
+          unzip -o magisk.apk 'lib/x86_64/libmagiskboot.so' -d magisk_tmp
+          cp magisk_tmp/lib/x86_64/libmagiskboot.so magiskboot && chmod +x magiskboot
+          ./magiskboot | head -2
+          mkdir -p boot_work && cd boot_work
+          ../magiskboot unpack ../stock-boot.img
+          KERNEL=$(ls ../kernel/out/arch/arm64/boot/Image.gz-dtb 2>/dev/null || ls ../kernel/out/arch/arm64/boot/Image.gz 2>/dev/null || echo ../kernel/out/arch/arm64/boot/Image)
+          cp $KERNEL kernel
+          ../magiskboot repack ../stock-boot.img ../boot-resukisu.img
+          cd .. && ls -la boot-resukisu.img
+
+      - name: Upload boot-resukisu.img
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-resukisu-picasso
+          path: boot-resukisu.img
