@@ -68,13 +68,13 @@ jobs:
             # 3. picasso_user_defconfig 是指向 vendor/picasso_user_defconfig 的符号链接，
             #    直接往真实文件追加 KSU 配置
             cat >> arch/arm64/configs/vendor/picasso_user_defconfig <<'EOF'
-            CONFIG_KSU=y
-            CONFIG_KSU_MANUAL_HOOK=y
-            CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y
-            CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y
-            CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y
-            CONFIG_KALLSYMS=y
-            CONFIG_KALLSYMS_ALL=y
+CONFIG_KSU=y
+CONFIG_KSU_MANUAL_HOOK=y
+CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y
+CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y
+CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y
+CONFIG_KALLSYMS=y
+CONFIG_KALLSYMS_ALL=y
 EOF
             echo "=== tail of defconfig ==="
             tail -10 arch/arm64/configs/picasso_user_defconfig
