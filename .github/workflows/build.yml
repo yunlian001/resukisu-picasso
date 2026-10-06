@@ -59,12 +59,10 @@ jobs:
           cd kernel
           export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
           ccache -M 5G
-          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu- \
-            HOSTCFLAGS="-fcommon" vendor/picasso_user_defconfig
-          make O=out ARCH=arm64 CC="ccache clang" CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu- \
-            HOSTCFLAGS="-fcommon" -j$(nproc) 2>&1 | tee build.log
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- HOSTCFLAGS="-fcommon" vendor/picasso_user_defconfig
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- HOSTCFLAGS="-fcommon" -j$(nproc) 2>&1 | tee build.log
           ls -la out/arch/arm64/boot/
 
       - name: Upload build log on failure
