@@ -87,7 +87,7 @@ jobs:
           make "${MKARGS[@]}" Image
           echo "=== vmlinux ==="; ls -la out/vmlinux*
           echo "=== boot artifacts ==="
-          ls -la out/arm64/boot/
+          ls -la out/arch/arm64/boot/
           test -f out/arch/arm64/boot/Image && echo "[+] Image present"
 
       - name: Upload build log
