@@ -64,17 +64,19 @@ jobs:
           export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
           ccache -M 5G || true
           # 直接用 gcc 绕过小米的 gcc-wrapper.py（它会把任何警告判为致命错误）；
-          # HOSTCFLAGS -fcommon 修复老 dtc 的 yylloc 多重定义（GCC10+ 默认 -fno-common）
+          # HOSTCFLAGS -fcommon 修复老 dtc 的 yylloc 多重定义（GCC10+ 默认 -fno-common）；
+          # 小米 Makefile 强制 -Werror=<具体警告>，必须逐个 Wno-error 才能覆盖
+          WNOERR="-Wno-error -Wno-error=strict-prototypes -Wno-error=implicit-int -Wno-error=incompatible-pointer-types -Wno-error=date-time -Wno-error=designated-init"
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
             CC=aarch64-linux-gnu-gcc \
             HOSTCFLAGS="-fcommon -Wno-deprecated-declarations" \
-            KCFLAGS="-Wno-error" picasso_user_defconfig
+            KCFLAGS="$WNOERR" picasso_user_defconfig
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
             CC=aarch64-linux-gnu-gcc \
             HOSTCFLAGS="-fcommon -Wno-deprecated-declarations" \
-            KCFLAGS="-Wno-error" -j$(nproc) 2>&1 | tee build.log
+            KCFLAGS="$WNOERR" -j$(nproc) 2>&1 | tee build.log
           echo "=== boot artifacts ==="
           ls -la out/arch/arm64/boot/
 
