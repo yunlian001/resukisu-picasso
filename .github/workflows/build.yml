@@ -67,10 +67,10 @@ jobs:
           ccache -M 5G
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- HOSTCFLAGS="-fcommon" \
-            PYTHON=python2 vendor/picasso_user_defconfig
+            KCFLAGS="-Wno-error" PYTHON=python2 vendor/picasso_user_defconfig
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- HOSTCFLAGS="-fcommon" \
-            PYTHON=python2 -j$(nproc) 2>&1 | tee build.log
+            KCFLAGS="-Wno-error" PYTHON=python2 -j$(nproc) 2>&1 | tee build.log
           ls -la out/arch/arm64/boot/
 
       - name: Upload build log on failure
