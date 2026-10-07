@@ -7,12 +7,17 @@ on:
         description: "集成 ReSukiSU；取消勾选=纯净 MiCode 对照内核（用于二分定位）"
         type: boolean
         default: true
+      hooks:
+        description: "（仅 KSU 时）应用手动 syscall hooks 补丁；取消=只装驱动不挂钩，用于二分"
+        type: boolean
+        default: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
       KSU: ${{ github.event.inputs.ksu }}
+      HOOKS: ${{ github.event.inputs.hooks }}
     steps:
       - name: Checkout this repo
         uses: actions/checkout@v4
@@ -54,8 +59,12 @@ jobs:
           sed -i -E 's/^#define __rticdata .*/#define __rticdata/' include/linux/init.h
 
           if [ "$KSU" = "true" ]; then
-            # 1. 手动 hook 补丁（exec/open/stat/reboot）
-            git apply -v ../patches/resukisu-hooks.patch
+            # 1. 手动 hook 补丁（exec/open/stat/reboot），可通过 hooks 输入关闭用于二分
+            if [ "$HOOKS" = "true" ]; then
+              git apply -v ../patches/resukisu-hooks.patch
+            else
+              echo "[*] Driver-only build: skipping syscall hooks patch"
+            fi
             # 2. ReSukiSU 已重构为 BakaSU，直接固定 2026-04-30 历史 commit，
             #    手动复刻旧 setup.sh 的全部动作（避开其已失效的旧 clone 地址）
             git clone https://github.com/Baka-SU/BakaSU.git KernelSU
@@ -139,5 +148,5 @@ jobs:
       - name: Upload boot-resukisu.img
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.KSU == 'true' && 'boot-resukisu-picasso' || 'boot-baseline-picasso' }}
+          name: ${{ env.KSU == 'true' && format('boot-resukisu-picasso-hooks{0}', env.HOOKS) || 'boot-baseline-picasso' }}
           path: boot-resukisu.img
