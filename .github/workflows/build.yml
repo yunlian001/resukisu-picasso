@@ -89,7 +89,7 @@ jobs:
 
       - name: Repack boot.img with new kernel
         run: |
-          curl -L -o magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v28.1/app-release.apk
+          curl -L -o magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
           unzip -o magisk.apk 'lib/x86_64/libmagiskboot.so' -d magisk_tmp
           cp magisk_tmp/lib/x86_64/libmagiskboot.so magiskboot && chmod +x magiskboot
           ./magiskboot | head -2
