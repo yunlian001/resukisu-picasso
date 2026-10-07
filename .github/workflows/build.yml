@@ -52,6 +52,8 @@ jobs:
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/${{ inputs.ksu_version }}/kernel/setup.sh" | bash
           # Make gcc-wrapper.py a pure passthrough (do not fail or delete objects on GCC 11+ warnings)
           sed -i 's/^[[:space:]]\+interpret_warning(line)/            pass/' scripts/gcc-wrapper.py
+          # Disable all -Werror in Makefiles (old kernel + GCC 11 has many false positives)
+          find . -name "Makefile" -exec sed -i 's/-Werror/-Wno-error/g' {} +
           echo "CONFIG_KSU=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
           echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
@@ -67,10 +69,10 @@ jobs:
           ccache -M 5G
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- HOSTCFLAGS="-fcommon" \
-            KCFLAGS="-Wno-error" PYTHON=python2 vendor/picasso_user_defconfig
+            KCFLAGS="-Wno-error=strict-prototypes -Wno-strict-prototypes -Wno-error" PYTHON=python2 vendor/picasso_user_defconfig
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- HOSTCFLAGS="-fcommon" \
-            KCFLAGS="-Wno-error" PYTHON=python2 -j$(nproc) 2>&1 | tee build.log
+            KCFLAGS="-Wno-error=strict-prototypes -Wno-strict-prototypes -Wno-error" PYTHON=python2 -j$(nproc) 2>&1 | tee build.log
           ls -la out/arch/arm64/boot/
 
       - name: Upload build log on failure
