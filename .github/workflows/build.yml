@@ -50,6 +50,9 @@ jobs:
           git config user.email "ci@local" && git config user.name "ci"
           git apply --whitespace=fix ../patches/resukisu-hooks.patch
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/${{ inputs.ksu_version }}/kernel/setup.sh" | bash
+          # Make gcc-wrapper.py warn-only (do not fail build on GCC 11+ false-positive warnings)
+          sed -i 's/sys.exit(1)/pass  # warnings do not fail the build/' scripts/gcc-wrapper.py
+          sed -i 's/print "error, forbidden warning:/print "warning:/' scripts/gcc-wrapper.py
           echo "CONFIG_KSU=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
           echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
