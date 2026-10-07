@@ -7,10 +7,6 @@ on:
         description: 'Stock boot.img URL'
         required: true
         default: 'https://github.com/yunlian001/resukisu-picasso/releases/download/boot-img/picasso-stock-boot.img'
-      kernel_src:
-        description: 'Kernel source repo'
-        required: true
-        default: 'https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git'
       kernel_branch:
         description: 'Kernel source branch'
         required: true
@@ -32,17 +28,25 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
           df -h /
 
-      - name: Install build dependencies
+      - name: Install host build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y git ccache bc bison flex libssl-dev libncurses-dev \
-            device-tree-compiler u-boot-tools lz4 zstd python2 python3 curl wget unzip zip cpio kmod \
-            libelf-dev dwarves pahole rsync \
-            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi gcc-aarch64-linux-gnu
+            device-tree-compiler u-boot-tools lz4 zstd python3 curl wget unzip zip cpio kmod \
+            libelf-dev rsync make gcc
+
+      - name: Fetch AOSP R-era toolchain (clang-r383902 + android-4.9)
+        run: |
+          git clone --depth 1 -b 11.0.1 https://github.com/picasso09/clang-11.0.1-r383902.git $HOME/clang
+          git clone --depth 1 -b lineage-19.1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git $HOME/gcc64
+          git clone --depth 1 -b lineage-19.1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git $HOME/gcc32
+          $HOME/clang/bin/clang --version | head -2
+          $HOME/gcc64/bin/aarch64-linux-android-gcc --version | head -1
+          $HOME/gcc64/bin/aarch64-linux-android-as --version | head -1
 
       - name: Clone kernel source
         run: |
-          git clone --depth 1 -b ${{ inputs.kernel_branch }} ${{ inputs.kernel_src }} kernel
+          git clone --depth 1 -b ${{ inputs.kernel_branch }} https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git kernel
 
       - name: Integrate KernelSU ${{ inputs.ksu_version }}
         run: |
@@ -50,36 +54,31 @@ jobs:
           git config user.email "ci@local" && git config user.name "ci"
           git apply --whitespace=fix ../patches/resukisu-hooks.patch
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/${{ inputs.ksu_version }}/kernel/setup.sh" | bash
-          # Make gcc-wrapper.py a pure passthrough (do not fail or delete objects on GCC 11+ warnings)
-          sed -i 's/^[[:space:]]\+interpret_warning(line)/            pass/' scripts/gcc-wrapper.py
-          # Disable all -Werror in Makefiles (old kernel + GCC 11 has many false positives)
-          find . -name "Makefile" -exec sed -i 's/-Werror[-a-z=]*//g' {} +
-          # Disable __bad_copy_to/__bad_copy_from compile-time size check (GCC 11 false positives)
-          sed -i 's/__bad_copy_to();/\/\/ __bad_copy_to();/' include/linux/thread_info.h
-          sed -i 's/__bad_copy_from();/\/\/ __bad_copy_from();/' include/linux/thread_info.h
-          echo "CONFIG_KSU=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
-          echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
-          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
-          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
-          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
-          echo "CONFIG_KALLSYMS=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
-          echo "CONFIG_KALLSYMS_ALL=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          DEFCONFIG=arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KSU=y" >> $DEFCONFIG
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> $DEFCONFIG
+          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y" >> $DEFCONFIG
+          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y" >> $DEFCONFIG
+          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y" >> $DEFCONFIG
+          echo "CONFIG_KALLSYMS=y" >> $DEFCONFIG
+          echo "CONFIG_KALLSYMS_ALL=y" >> $DEFCONFIG
 
       - name: Build kernel
         run: |
-          set -e -o pipefail
+          set -eo pipefail
           cd kernel
+          export PATH="$HOME/clang/bin:$HOME/gcc64/bin:$HOME/gcc32/bin:$PATH"
           export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
-          ccache -M 5G
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- HOSTCFLAGS="-fcommon" \
-            PYTHON=python2 vendor/picasso_user_defconfig
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- HOSTCFLAGS="-fcommon" \
-            PYTHON=python2 -j$(nproc) 2>&1 | tee build.log
-          echo "=== boot dir contents ==="
-          ls -la out/arch/arm64/boot/
-          find out/arch/arm64/boot -maxdepth 1 -type f
+          ccache -M 5G || true
+          COMMON_ARGS="O=out ARCH=arm64 CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            HOSTCFLAGS=-fcommon"
+          make $COMMON_ARGS vendor/picasso_user_defconfig
+          make $COMMON_ARGS -j"$(nproc)" 2>&1 | tee build.log
+          echo "=== boot dir ==="
+          find out/arch/arm64/boot -maxdepth 1 -type f -printf '%f  %s bytes\n' | sort
 
       - name: Upload build log on failure
         if: failure()
@@ -90,19 +89,23 @@ jobs:
 
       - name: Download stock boot.img
         run: |
-          curl -L -o stock-boot.img "${{ inputs.boot_img_url }}"
+          curl -L --retry 3 -o stock-boot.img "${{ inputs.boot_img_url }}"
           ls -la stock-boot.img
 
       - name: Repack boot.img with new kernel
         run: |
-          curl -L -o magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+          set -eo pipefail
+          curl -L --retry 3 -o magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
           unzip -o magisk.apk 'lib/x86_64/libmagiskboot.so' -d magisk_tmp
           cp magisk_tmp/lib/x86_64/libmagiskboot.so magiskboot && chmod +x magiskboot
-          ./magiskboot | head -2
           mkdir -p boot_work && cd boot_work
           ../magiskboot unpack ../stock-boot.img
-          KERNEL=$(ls ../kernel/out/arch/arm64/boot/Image.gz-dtb 2>/dev/null || ls ../kernel/out/arch/arm64/boot/Image.gz 2>/dev/null || ls ../kernel/out/arch/arm64/boot/Image 2>/dev/null || ls ../kernel/out/arch/arm64/boot/Image-dtb 2>/dev/null || echo "")
-          echo "Using kernel: $KERNEL"
+          KERNEL=""
+          for f in Image.gz-dtb Image-dtb Image.gz Image; do
+            if [ -f "../kernel/out/arch/arm64/boot/$f" ]; then KERNEL="../kernel/out/arch/arm64/boot/$f"; break; fi
+          done
+          test -n "$KERNEL"
+          echo "Using kernel image: $KERNEL"
           cp "$KERNEL" kernel
           ../magiskboot repack ../stock-boot.img ../boot-ksu.img
           cd .. && ls -la boot-ksu.img
