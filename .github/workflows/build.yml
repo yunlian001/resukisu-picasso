@@ -53,7 +53,7 @@ jobs:
           # Make gcc-wrapper.py a pure passthrough (do not fail or delete objects on GCC 11+ warnings)
           sed -i 's/^[[:space:]]\+interpret_warning(line)/            pass/' scripts/gcc-wrapper.py
           # Disable all -Werror in Makefiles (old kernel + GCC 11 has many false positives)
-          find . -name "Makefile" -exec sed -i 's/-Werror/-Wno-error/g' {} +
+          find . -name "Makefile" -exec sed -i 's/-Werror[-a-z=]*//g' {} +
           echo "CONFIG_KSU=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
           echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
