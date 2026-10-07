@@ -1,23 +1,28 @@
-name: Build ReSukiSU boot.img for Redmi K30 5G (picasso)
+name: Build KernelSU boot.img for Redmi K30 5G (picasso)
 
 on:
   workflow_dispatch:
     inputs:
-      ksu:
-        description: "集成 ReSukiSU；取消勾选=纯净 MiCode 对照内核（用于二分定位）"
-        type: boolean
-        default: true
-      hooks:
-        description: "（仅 KSU 时）应用手动 syscall hooks 补丁；取消=只装驱动不挂钩，用于二分"
-        type: boolean
-        default: true
+      boot_img_url:
+        description: 'Stock boot.img URL'
+        required: true
+        default: 'https://github.com/yunlian001/resukisu-picasso/releases/download/boot-img/picasso-stock-boot.img'
+      kernel_src:
+        description: 'Kernel source repo'
+        required: true
+        default: 'https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git'
+      kernel_branch:
+        description: 'Kernel source branch'
+        required: true
+        default: 'picasso-r-oss'
+      ksu_version:
+        description: 'KernelSU version tag'
+        required: true
+        default: 'v0.9.5'
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    env:
-      KSU: ${{ github.event.inputs.ksu }}
-      HOOKS: ${{ github.event.inputs.hooks }}
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout this repo
         uses: actions/checkout@v4
@@ -30,128 +35,67 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache bc bison flex libssl-dev libncurses-dev \
-            device-tree-compiler u-boot-tools lz4 zstd python3 curl wget unzip zip cpio kmod \
-            libelf-dev rsync \
-            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          sudo apt-get install -y git ccache bc bison flex libssl-dev libncurses-dev \
+            device-tree-compiler u-boot-tools lz4 zstd python2 python3 curl wget unzip zip cpio kmod \
+            libelf-dev dwarves pahole rsync \
+            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi gcc-aarch64-linux-gnu
 
       - name: Clone kernel source
         run: |
-          git clone --depth 1 -b picasso-r-oss https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git kernel
+          git clone --depth 1 -b ${{ inputs.kernel_branch }} ${{ inputs.kernel_src }} kernel
 
-      - name: Integrate ReSukiSU
-        shell: bash
+      - name: Integrate KernelSU ${{ inputs.ksu_version }}
         run: |
-          set -uxo pipefail
           cd kernel
-          # 0a. 修复新版 GCC 对 ipa_hw_stats.c 边界检查 "sizeof < count + 1" 的
-          #     copy_to_user 静态尺寸误报（同时消除 count+1 溢出隐患）
-          sed -i 's/if (sizeof(dbg_buff) < count + 1) {/if (count >= sizeof(dbg_buff)) {/' \
-            drivers/platform/msm/ipa/ipa_v3/ipa_hw_stats.c
-          # 0b. genksyms 无法理解函数返回类型上的 __packed，导致 gsi 的 __crc
-          #     重定位在 -shared 链接下被新版 ld 拒绝（postmarketOS 同款修复）
-          sed -i 's/static union __packed gsi_channel_scratch __gsi_update_mhi_channel_scratch(/static union gsi_channel_scratch __gsi_update_mhi_channel_scratch(/' \
-            drivers/platform/msm/gsi/gsi.c
-          # 0c. 关闭高通 RTIC 防篡改：__rticdata 无 Kconfig 守卫、无条件把
-          #     selinux_state 等放入末尾独立 .bss.rtic 段，新版 ld 链接时该段
-          #     地址超出 ADRP ±4GB 范围而截断。将宏置空，数据回到普通 BSS。
-          sed -i -E 's/^#define __rticdata .*/#define __rticdata/' include/linux/init.h
-
-          if [ "$KSU" = "true" ]; then
-            # 1. 手动 hook 补丁（exec/open/stat/reboot），可通过 hooks 输入关闭用于二分
-            if [ "$HOOKS" = "true" ]; then
-              git apply -v ../patches/resukisu-hooks.patch
-            else
-              echo "[*] Driver-only build: skipping syscall hooks patch"
-            fi
-            # 2. ReSukiSU 已重构为 BakaSU，直接固定 2026-04-30 历史 commit，
-            #    手动复刻旧 setup.sh 的全部动作（避开其已失效的旧 clone 地址）
-            git clone https://github.com/Baka-SU/BakaSU.git KernelSU
-            ( cd KernelSU && git checkout d857f65728fc07f7a970e1239215d8eb7a17a4e4 )
-            test -d KernelSU/kernel && echo "[+] KernelSU kernel tree present"
-            # ★ 修复重构版 ksu_handle_execveat() 漏检 NULL：execveat(AT_EMPTY_PATH)
-            #   时 do_execveat_common(filename=NULL) 会在 filename->name 处空指针 panic。
-            #   对齐上游守卫 if (!filename || IS_ERR(filename))
-            sed -i '0,/    if (IS_ERR(filename)) {/s//    if (!filename || IS_ERR(filename)) {/' KernelSU/kernel/feature/sucompat.c
-            grep -n "!filename || IS_ERR(filename)" KernelSU/kernel/feature/sucompat.c && echo "[+] NULL guard applied"
-            ( cd drivers && ln -sf ../KernelSU/kernel kernelsu )
-            printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
-            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-            echo "--- drivers/Makefile tail ---"; tail -3 drivers/Makefile
-            # 3. picasso_user_defconfig 是指向 vendor/picasso_user_defconfig 的符号链接，
-            #    直接往真实文件追加 KSU 配置
-            cat >> arch/arm64/configs/vendor/picasso_user_defconfig <<'EOF'
-          CONFIG_KSU=y
-          CONFIG_KSU_MANUAL_HOOK=y
-          CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y
-          CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y
-          CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y
-          CONFIG_KALLSYMS=y
-          CONFIG_KALLSYMS_ALL=y
-          EOF
-            echo "=== tail of defconfig ==="
-            tail -10 arch/arm64/configs/picasso_user_defconfig
-          else
-            echo "[*] Baseline build: skipping hooks patch and all KSU integration"
-          fi
+          git config user.email "ci@local" && git config user.name "ci"
+          git apply --whitespace=fix ../patches/resukisu-hooks.patch
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/${{ inputs.ksu_version }}/kernel/setup.sh" | bash
+          echo "CONFIG_KSU=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KALLSYMS=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
+          echo "CONFIG_KALLSYMS_ALL=y" >> arch/arm64/configs/vendor/picasso_user_defconfig
 
       - name: Build kernel
         run: |
           cd kernel
           export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
-          ccache -M 5G || true
-          # 直接用 gcc 绕过小米的 gcc-wrapper.py（它会把任何警告判为致命错误）；
-          # HOSTCFLAGS -fcommon 修复老 dtc 的 yylloc 多重定义（GCC10+ 默认 -fno-common）；
-          # 小米 Makefile 强制 -Werror=<具体警告>，必须逐个 Wno-error 才能覆盖
-          WNOERR="-Wno-error -Wno-error=strict-prototypes -Wno-error=implicit-int -Wno-error=incompatible-pointer-types -Wno-error=date-time -Wno-error=designated-init"
-          MKARGS=(O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CC=aarch64-linux-gnu-gcc "KCFLAGS=$WNOERR" HOSTCFLAGS=-fcommon)
-          make "${MKARGS[@]}" picasso_user_defconfig
-          set -o pipefail
-          make "${MKARGS[@]}" -j$(nproc) 2>&1 | tee build.log
-          # 显式确保镜像目标生成：若默认构建漏建或链接被掩盖，此处会暴露真实错误
-          make "${MKARGS[@]}" Image
-          echo "=== vmlinux ==="; ls -la out/vmlinux*
-          echo "=== boot artifacts ==="
+          ccache -M 5G
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- HOSTCFLAGS="-fcommon" vendor/picasso_user_defconfig
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- HOSTCFLAGS="-fcommon" -j$(nproc) 2>&1 | tee build.log
           ls -la out/arch/arm64/boot/
-          test -f out/arch/arm64/boot/Image && echo "[+] Image present"
 
-      - name: Upload build log
-        if: always()
+      - name: Upload build log on failure
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: build-log
           path: kernel/build.log
-          if-no-files-found: ignore
 
-      - name: Prepare stock boot.img
+      - name: Download stock boot.img
         run: |
-          gunzip -c stock-boot.img.gz > stock-boot.img
+          curl -L -o stock-boot.img "${{ inputs.boot_img_url }}"
           ls -la stock-boot.img
 
       - name: Repack boot.img with new kernel
         run: |
-          set -e
-          curl -L --retry 5 --retry-all-errors -o magisk.apk \
-            https://github.com/topjohnwu/Magisk/releases/download/v28.1/Magisk-v28.1.apk
+          curl -L -o magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v28.1/app-release.apk
           unzip -o magisk.apk 'lib/x86_64/libmagiskboot.so' -d magisk_tmp
           cp magisk_tmp/lib/x86_64/libmagiskboot.so magiskboot && chmod +x magiskboot
-          ./magiskboot | head -2 || true
+          ./magiskboot | head -2
           mkdir -p boot_work && cd boot_work
           ../magiskboot unpack ../stock-boot.img
-          BOOTDIR=../kernel/out/arch/arm64/boot
-          KERNEL=""
-          for cand in Image Image.gz Image.gz-dtb Image-dtb; do
-            if [ -f "$BOOTDIR/$cand" ]; then KERNEL="$BOOTDIR/$cand"; break; fi
-          done
-          test -n "$KERNEL" || { echo "No kernel image found in $BOOTDIR"; ls -la "$BOOTDIR"; exit 1; }
-          echo "Using kernel: $KERNEL"
-          cp "$KERNEL" kernel
-          ../magiskboot repack ../stock-boot.img ../boot-resukisu.img
-          cd .. && ls -la boot-resukisu.img
+          KERNEL=$(ls ../kernel/out/arch/arm64/boot/Image.gz-dtb 2>/dev/null || ls ../kernel/out/arch/arm64/boot/Image.gz 2>/dev/null || echo ../kernel/out/arch/arm64/boot/Image)
+          cp $KERNEL kernel
+          ../magiskboot repack ../stock-boot.img ../boot-ksu.img
+          cd .. && ls -la boot-ksu.img
 
-      - name: Upload boot-resukisu.img
+      - name: Upload boot-ksu.img
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.KSU == 'true' && format('boot-resukisu-picasso-hooks{0}', env.HOOKS) || 'boot-baseline-picasso' }}
-          path: boot-resukisu.img
+          name: boot-ksu-picasso
+          path: boot-ksu.img
