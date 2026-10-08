@@ -131,8 +131,16 @@ jobs:
           ../magiskboot repack ../stock-boot.img ../boot-ksu.img
           cd .. && ls -la boot-ksu.img
 
+      - name: Compute artifact name
+        id: artname
+        run: |
+          safe=$(echo "${{ inputs.defconfig }}" | tr / _)
+          ksustr="nosu"
+          if [ "${{ inputs.ksu_enable }}" = "true" ]; then ksustr="ksu"; fi
+          echo "name=boot-${safe}-${ksustr}" >> "$GITHUB_OUTPUT"
+
       - name: Upload boot-ksu.img
         uses: actions/upload-artifact@v4
         with:
-          name: boot-${{ inputs.defconfig }}-ksu${{ inputs.ksu_enable == 'true' && '-yes' || '-no' }}
+          name: ${{ steps.artname.outputs.name }}
           path: boot-ksu.img
