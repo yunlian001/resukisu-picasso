@@ -82,6 +82,11 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             HOSTCFLAGS=-fcommon"
           make $COMMON_ARGS ${{ inputs.defconfig }}
+          # focaltech_core.c unconditionally references fod_* fields gated by CONFIG_TOUCHSCREEN_FTS_FOD;
+          # lito-perf_defconfig ships FTS but not FTS_FOD, so re-enable it here.
+          echo "CONFIG_TOUCHSCREEN_FTS_FOD=y" >> out/.config
+          make $COMMON_ARGS olddefconfig
+          grep -q "^CONFIG_TOUCHSCREEN_FTS_FOD=y" out/.config || { echo "FATAL: CONFIG_TOUCHSCREEN_FTS_FOD dropped by olddefconfig"; exit 1; }
           # Fail hard if KernelSU did not make it into .config (only when ksu_enable=true)
           if [ "${{ inputs.ksu_enable }}" = "true" ]; then
             grep -q "^CONFIG_KSU=y" out/.config || { echo "FATAL: CONFIG_KSU is not set"; exit 1; }
