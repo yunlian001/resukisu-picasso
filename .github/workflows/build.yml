@@ -11,8 +11,12 @@ on:
         description: 'Kernel source branch'
         required: true
         default: 'picasso-r-oss'
+      config_source:
+        description: "Config source: 'stock' = repo configs/stock_picasso_perf.config (dumped from device /proc/config.gz); 'defconfig' = use the defconfig target below"
+        required: true
+        default: 'stock'
       defconfig:
-        description: 'defconfig make target (under arch/arm64/configs/)'
+        description: 'defconfig make target (only used when config_source=defconfig)'
         required: true
         default: 'vendor/lito-perf_defconfig'
       ksu_enable:
@@ -64,10 +68,6 @@ jobs:
           # bash -s passes the version tag so setup.sh checks out exactly this version
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/${{ inputs.ksu_version }}/kernel/setup.sh" | bash -s ${{ inputs.ksu_version }}
           cd KernelSU && git describe --tags && cd ..
-          DEFCONFIG=arch/arm64/configs/${{ inputs.defconfig }}
-          echo "CONFIG_KSU=y" >> $DEFCONFIG
-          echo "CONFIG_KALLSYMS=y" >> $DEFCONFIG
-          echo "CONFIG_KALLSYMS_ALL=y" >> $DEFCONFIG
 
       - name: Build kernel
         run: |
@@ -81,13 +81,34 @@ jobs:
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             HOSTCFLAGS=-fcommon"
-          make $COMMON_ARGS ${{ inputs.defconfig }}
-          # focaltech_core.c unconditionally references fod_* fields gated by CONFIG_TOUCHSCREEN_FTS_FOD;
-          # lito-perf_defconfig ships FTS but not FTS_FOD, so re-enable it here.
-          echo "CONFIG_TOUCHSCREEN_FTS_FOD=y" >> out/.config
+          mkdir -p out
+          if [ "${{ inputs.config_source }}" = "stock" ]; then
+            # Use the exact perf config dumped from the running stock kernel (/proc/config.gz)
+            cp "$GITHUB_WORKSPACE/configs/stock_picasso_perf.config" out/.config
+            echo "Base config: device stock perf config ($(grep -c '=y' out/.config) =y items)"
+          else
+            make $COMMON_ARGS ${{ inputs.defconfig }}
+            # focaltech_core.c unconditionally references fod_* fields gated by CONFIG_TOUCHSCREEN_FTS_FOD
+            echo "CONFIG_TOUCHSCREEN_FTS_FOD=y" >> out/.config
+          fi
+          # KernelSU options injected into .config before olddefconfig resolves them
+          if [ "${{ inputs.ksu_enable }}" = "true" ]; then
+            echo "CONFIG_KSU=y" >> out/.config
+            echo "CONFIG_KALLSYMS=y" >> out/.config
+            echo "CONFIG_KALLSYMS_ALL=y" >> out/.config
+          fi
           make $COMMON_ARGS olddefconfig
-          grep -q "^CONFIG_TOUCHSCREEN_FTS_FOD=y" out/.config || { echo "FATAL: CONFIG_TOUCHSCREEN_FTS_FOD dropped by olddefconfig"; exit 1; }
-          # Fail hard if KernelSU did not make it into .config (only when ksu_enable=true)
+          # ---- Config-loss audit: stock =y symbols that did not survive into this source tree ----
+          if [ "${{ inputs.config_source }}" = "stock" ]; then
+            grep '=y$' "$GITHUB_WORKSPACE/configs/stock_picasso_perf.config" | sed 's/=y$//' | sort > /tmp/stock_y.txt
+            grep '=y$' out/.config | sed 's/=y$//' | sort > /tmp/new_y.txt
+            comm -23 /tmp/stock_y.txt /tmp/new_y.txt > /tmp/missing_y.txt || true
+            cp out/.config "$GITHUB_WORKSPACE/final.config"
+            cp /tmp/missing_y.txt "$GITHUB_WORKSPACE/missing_y.txt"
+            echo "=== stock =y count: $(wc -l < /tmp/stock_y.txt), new =y count: $(wc -l < /tmp/new_y.txt), missing: $(wc -l < /tmp/missing_y.txt) ==="
+            echo "=== boot-critical symbols present in new .config ==="
+            grep -E 'CONFIG_(SCSI_UFS_QCOM|SCSI_UFSHCD|ARM_SMMU|PINCTRL_LITO|QCOM_RPMH|QCOM_SCM=|QCOM_SMEM|REGULATOR_QCOM_RPMH|INTERCONNECT|COMMON_CLK_QCOM|SYNAPTICS_TCM|TOUCHSCREEN_SYNAPTICS_DSX_CORE)=' out/.config || true
+          fi
           if [ "${{ inputs.ksu_enable }}" = "true" ]; then
             grep -q "^CONFIG_KSU=y" out/.config || { echo "FATAL: CONFIG_KSU is not set"; exit 1; }
             grep "^CONFIG_KSU" out/.config
@@ -100,6 +121,15 @@ jobs:
           fi
           echo "=== boot dir ==="
           find out/arch/arm64/boot -maxdepth 1 -type f -printf '%f  %s bytes\n' | sort
+
+      - name: Upload resolved config audit
+        if: ${{ inputs.config_source == 'stock' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-audit
+          path: |
+            final.config
+            missing_y.txt
 
       - name: Upload build log on failure
         if: failure()
@@ -134,10 +164,10 @@ jobs:
       - name: Compute artifact name
         id: artname
         run: |
-          safe=$(echo "${{ inputs.defconfig }}" | tr / _)
+          if [ "${{ inputs.config_source }}" = "stock" ]; then base="stockcfg"; else base=$(echo "${{ inputs.defconfig }}" | tr / _); fi
           ksustr="nosu"
           if [ "${{ inputs.ksu_enable }}" = "true" ]; then ksustr="ksu"; fi
-          echo "name=boot-${safe}-${ksustr}" >> "$GITHUB_OUTPUT"
+          echo "name=boot-${base}-${ksustr}" >> "$GITHUB_OUTPUT"
 
       - name: Upload boot-ksu.img
         uses: actions/upload-artifact@v4
