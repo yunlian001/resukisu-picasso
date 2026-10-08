@@ -11,9 +11,17 @@ on:
         description: 'Kernel source branch'
         required: true
         default: 'picasso-r-oss'
-      ksu_version:
-        description: 'KernelSU version tag'
+      defconfig:
+        description: 'defconfig make target (under arch/arm64/configs/)'
         required: true
+        default: 'vendor/lito-perf_defconfig'
+      ksu_enable:
+        description: 'Integrate KernelSU (true/false)'
+        required: true
+        default: 'false'
+      ksu_version:
+        description: 'KernelSU version tag (only used when ksu_enable=true)'
+        required: false
         default: 'v0.9.5'
 
 jobs:
@@ -48,14 +56,15 @@ jobs:
         run: |
           git clone --depth 1 -b ${{ inputs.kernel_branch }} https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git kernel
 
-      - name: Integrate KernelSU ${{ inputs.ksu_version }}
+      - name: Integrate KernelSU ${{ inputs.ksu_version }} (only when ksu_enable=true)
+        if: ${{ inputs.ksu_enable == 'true' }}
         run: |
           cd kernel
           git config user.email "ci@local" && git config user.name "ci"
           # bash -s passes the version tag so setup.sh checks out exactly this version
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/${{ inputs.ksu_version }}/kernel/setup.sh" | bash -s ${{ inputs.ksu_version }}
           cd KernelSU && git describe --tags && cd ..
-          DEFCONFIG=arch/arm64/configs/vendor/picasso_user_defconfig
+          DEFCONFIG=arch/arm64/configs/${{ inputs.defconfig }}
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KALLSYMS=y" >> $DEFCONFIG
           echo "CONFIG_KALLSYMS_ALL=y" >> $DEFCONFIG
@@ -72,15 +81,18 @@ jobs:
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             HOSTCFLAGS=-fcommon"
-          make $COMMON_ARGS vendor/picasso_user_defconfig
-          # Fail hard if KernelSU did not make it into .config
-          grep -q "^CONFIG_KSU=y" out/.config || { echo "FATAL: CONFIG_KSU is not set"; exit 1; }
-          grep "^CONFIG_KSU" out/.config
+          make $COMMON_ARGS ${{ inputs.defconfig }}
+          # Fail hard if KernelSU did not make it into .config (only when ksu_enable=true)
+          if [ "${{ inputs.ksu_enable }}" = "true" ]; then
+            grep -q "^CONFIG_KSU=y" out/.config || { echo "FATAL: CONFIG_KSU is not set"; exit 1; }
+            grep "^CONFIG_KSU" out/.config
+          fi
           make $COMMON_ARGS -j"$(nproc)" 2>&1 | tee build.log
-          # Fail hard if KernelSU objects were not compiled
-          KSU_OBJS=$(find out -path "*kernelsu*" -name "*.o" | head -20)
-          echo "KSU objects: $KSU_OBJS"
-          test -n "$KSU_OBJS" || { echo "FATAL: no kernelsu objects built"; exit 1; }
+          if [ "${{ inputs.ksu_enable }}" = "true" ]; then
+            KSU_OBJS=$(find out -path "*kernelsu*" -name "*.o" | head -20)
+            echo "KSU objects: $KSU_OBJS"
+            test -n "$KSU_OBJS" || { echo "FATAL: no kernelsu objects built"; exit 1; }
+          fi
           echo "=== boot dir ==="
           find out/arch/arm64/boot -maxdepth 1 -type f -printf '%f  %s bytes\n' | sort
 
@@ -117,5 +129,5 @@ jobs:
       - name: Upload boot-ksu.img
         uses: actions/upload-artifact@v4
         with:
-          name: boot-ksu-picasso
+          name: boot-${{ inputs.defconfig }}-ksu${{ inputs.ksu_enable == 'true' && '-yes' || '-no' }}
           path: boot-ksu.img
